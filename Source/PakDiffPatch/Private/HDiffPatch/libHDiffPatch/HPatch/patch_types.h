@@ -31,35 +31,35 @@
 
 #ifndef PAKDIFFPATCH_EXPORTS
 #if defined(PLATFORM_WINDOWS) && PLATFORM_WINDOWS
-#define DIFF_API __declspec(dllexport)
+#define DIFFPATCH_API __declspec(dllexport)
 #elif defined(PLATFORM_HOLOLENS) && PLATFORM_HOLOLENS
-#define DIFF_API __declspec(dllexport)
+#define DIFFPATCH_API __declspec(dllexport)
 #elif defined(PLATFORM_ANDROID) && PLATFORM_ANDROID
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #elif defined(PLATFORM_IOS) && PLATFORM_IOS
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #elif defined(PLATFORM_MAC) && PLATFORM_MAC
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #elif defined(PLATFORM_UNIX) && PLATFORM_UNIX
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #else
-#define DIFF_API
+#define DIFFPATCH_API
 #endif
 #else
 #if defined(PLATFORM_WINDOWS) && PLATFORM_WINDOWS
-#define DIFF_API __declspec(dllimport)
+#define DIFFPATCH_API __declspec(dllimport)
 #elif defined(PLATFORM_HOLOLENS) && PLATFORM_HOLOLENS
-#define DIFF_API __declspec(dllimport)
+#define DIFFPATCH_API __declspec(dllimport)
 #elif defined(PLATFORM_ANDROID) && PLATFORM_ANDROID
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #elif defined(PLATFORM_IOS) && PLATFORM_IOS
-#define DIFF_API
+#define DIFFPATCH_API
 #elif defined(PLATFORM_MAC) && PLATFORM_MAC
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #elif defined(PLATFORM_UNIX) && PLATFORM_UNIX
-#define DIFF_API __attribute__((visibility("default")))
+#define DIFFPATCH_API __attribute__((visibility("default")))
 #else
-#define DIFF_API
+#define DIFFPATCH_API
 #endif
 #endif
 
@@ -203,9 +203,9 @@ extern "C" {
 
     
     
-	DIFF_API void mem_as_hStreamInput(hpatch_TStreamInput* out_stream,
+	DIFFPATCH_API void mem_as_hStreamInput(hpatch_TStreamInput* out_stream,
                              const unsigned char* mem,const unsigned char* mem_end);
-	DIFF_API void mem_as_hStreamOutput(hpatch_TStreamOutput* out_stream,
+	DIFFPATCH_API void mem_as_hStreamOutput(hpatch_TStreamOutput* out_stream,
                               unsigned char* mem,unsigned char* mem_end);
     
     hpatch_BOOL hpatch_deccompress_mem(hpatch_TDecompress* decompressPlugin,
@@ -231,9 +231,9 @@ extern "C" {
 
     
     #define  hpatch_kMaxPackedUIntBytes ((sizeof(hpatch_StreamPos_t)*8+6)/7+1)
-    DIFF_API hpatch_BOOL hpatch_packUIntWithTag(unsigned char** out_code,unsigned char* out_code_end,
+	DIFFPATCH_API hpatch_BOOL hpatch_packUIntWithTag(unsigned char** out_code,unsigned char* out_code_end,
                                        hpatch_StreamPos_t uValue,hpatch_uint highTag,const hpatch_uint kTagBit);
-	DIFF_API hpatch_uint hpatch_packUIntWithTag_size(hpatch_StreamPos_t uValue,const hpatch_uint kTagBit);
+	DIFFPATCH_API hpatch_uint hpatch_packUIntWithTag_size(hpatch_StreamPos_t uValue,const hpatch_uint kTagBit);
     #define hpatch_packUInt(out_code,out_code_end,uValue) \
                 hpatch_packUIntWithTag(out_code,out_code_end,uValue,0,0)
     #define hpatch_packUInt_size(uValue) hpatch_packUIntWithTag_size(uValue,0)

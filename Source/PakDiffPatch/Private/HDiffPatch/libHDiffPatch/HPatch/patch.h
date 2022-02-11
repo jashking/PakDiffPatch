@@ -60,7 +60,7 @@ hpatch_BOOL patch_stream(const hpatch_TStreamOutput* out_newData,       //sequen
 //see patch_stream()
 //  can passing more memory for I/O cache to optimize speed
 //  note: (temp_cache_end-temp_cache)>=2048
-DIFF_API hpatch_BOOL patch_stream_with_cache(const hpatch_TStreamOutput* out_newData,    //sequential write
+DIFFPATCH_API hpatch_BOOL patch_stream_with_cache(const hpatch_TStreamOutput* out_newData,    //sequential write
                                     const hpatch_TStreamInput*  oldData,        //random read
                                     const hpatch_TStreamInput*  serializedDiff, //random read
                                     unsigned char* temp_cache,unsigned char* temp_cache_end);
@@ -95,7 +95,7 @@ hpatch_BOOL patch_decompress(const hpatch_TStreamOutput* out_newData,       //se
 //see patch_decompress()
 //  can passing larger memory cache to optimize speed
 //  note: (temp_cache_end-temp_cache)>=2048
-DIFF_API hpatch_BOOL patch_decompress_with_cache(const hpatch_TStreamOutput* out_newData,    //sequential write
+DIFFPATCH_API hpatch_BOOL patch_decompress_with_cache(const hpatch_TStreamOutput* out_newData,    //sequential write
                                         const hpatch_TStreamInput*  oldData,        //random read
                                         const hpatch_TStreamInput*  compressedDiff, //random read
                                         hpatch_TDecompress* decompressPlugin,
@@ -152,7 +152,7 @@ hpatch_BOOL hpatch_coverList_close(hpatch_TCoverList* coverList) {
 //  singleCompressedDiff create by create_single_compressed_diff() or create_single_compressed_diff_stream()
 //  you can download&patch diffData at the same time, without saving it to disk
 //  same as call getSingleCompressedDiffInfo() + listener->onDiffInfo() + patch_single_compressed_diff()
-DIFF_API hpatch_BOOL patch_single_stream(sspatch_listener_t* listener, //call back when got diffInfo
+DIFFPATCH_API hpatch_BOOL patch_single_stream(sspatch_listener_t* listener, //call back when got diffInfo
                                 const hpatch_TStreamOutput* out_newData,          //sequential write
                                 const hpatch_TStreamInput*  oldData,              //random read
                                 const hpatch_TStreamInput*  singleCompressedDiff, //sequential read every byte
@@ -178,7 +178,7 @@ static hpatch_inline hpatch_BOOL
 
 //get singleCompressedDiff info
 //  singleCompressedDiff create by create_single_compressed_diff() or create_single_compressed_diff_stream()
-DIFF_API hpatch_BOOL getSingleCompressedDiffInfo(hpatch_singleCompressedDiffInfo* out_diffInfo,
+DIFFPATCH_API hpatch_BOOL getSingleCompressedDiffInfo(hpatch_singleCompressedDiffInfo* out_diffInfo,
                                         const hpatch_TStreamInput*  singleCompressedDiff,   //sequential read
                                         hpatch_StreamPos_t diffInfo_pos//default 0, begin pos in singleCompressedDiff
                                         );

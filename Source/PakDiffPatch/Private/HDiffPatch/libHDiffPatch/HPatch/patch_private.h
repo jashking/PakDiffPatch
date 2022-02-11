@@ -64,8 +64,8 @@ typedef struct _THDiffzHead{
     hpatch_StreamPos_t headEndPos;
     hpatch_StreamPos_t coverEndPos;
 } _THDiffzHead;
-    
-DIFF_API hpatch_BOOL read_diffz_head(hpatch_compressedDiffInfo* out_diffInfo,_THDiffzHead* out_head,
+
+DIFFPATCH_API hpatch_BOOL read_diffz_head(hpatch_compressedDiffInfo* out_diffInfo, _THDiffzHead* out_head,
                             const hpatch_TStreamInput* compressedDiff);
 
 // Stream Clip cache
