@@ -32,10 +32,10 @@
 namespace hdiff_private{
 static  const size_t kMinTrustMatchedLength=1024*16;
 static  const size_t kMinMatchedLength = 16;
+static  const size_t kMatchBlockSize_min=4;//sizeof(hpatch_uint32_t);
 static  const size_t kBestReadSize=1024*256; //for sequence read
 static  const size_t kMinReadSize=1024;      //for random first read speed
 static  const size_t kMinBackupReadSize=256;
-static  const size_t kMatchBlockSize_min=4;
 static  const size_t kMaxMatchRange=1024*64;
 static  const size_t kMaxLinkIndexFindSize=64;
 
@@ -131,8 +131,8 @@ static size_t posToBlockIndex(hpatch_StreamPos_t pos,size_t kMatchBlockSize,size
 TDigestMatcher::~TDigestMatcher(){
 }
     
-TDigestMatcher::TDigestMatcher(const hpatch_TStreamInput* oldData,size_t kMatchBlockSize,bool kIsSkipSameRange)
-:m_oldData(oldData),m_isUseLargeSorted(true),m_kIsSkipSameRange(kIsSkipSameRange),
+TDigestMatcher::TDigestMatcher(const hpatch_TStreamInput* oldData,size_t kMatchBlockSize,bool kInIsSkipSameRange)
+:m_oldData(oldData),m_isUseLargeSorted(true),m_kIsSkipSameRange(kInIsSkipSameRange),
 m_newCacheSize(0),m_oldCacheSize(0),m_oldMinCacheSize(0),m_backupCacheSize(0),m_kMatchBlockSize(0){
     if (kMatchBlockSize>(oldData->streamSize+1)/2)
         kMatchBlockSize=(size_t)((oldData->streamSize+1)/2);
@@ -575,7 +575,7 @@ static void tm_search_cover(const adler_uint_t* blocksBase,size_t blocksSize,
                             const TIndex* iblocks,const TIndex* iblocks_end,
                             TOldStreamCache& oldStream,TNewStreamCache& newStream,
                             const TBloomFilter<adler_hash_t>& filter,
-                            bool kIsSkipSameRange, TCovers* out_covers) {
+                            bool kIsSkipSameRange,hpatch_TOutputCovers* out_covers) {
     TDigest_comp comp(blocksBase);
     TCover  lastCover={0,0,0};
     while (true) {
@@ -600,7 +600,8 @@ static void tm_search_cover(const adler_uint_t* blocksBase,size_t blocksSize,
             tryLink(lastCover,curCover,oldStream,newStream);
             if (curCover.length>=kMinMatchedLength){
                 //matched
-                out_covers->addCover(curCover);
+                if (!out_covers->push_cover(out_covers,&curCover))
+                    throw std::runtime_error("TDigestMatcher::search_cover() push_cover error!");
                 lastCover=curCover;
                 if (!newStream.resetPos(curCover.newPos+curCover.length)) break;//finish
                 continue;
@@ -611,7 +612,7 @@ static void tm_search_cover(const adler_uint_t* blocksBase,size_t blocksSize,
     }
 }
 
-void TDigestMatcher::search_cover(const hpatch_TStreamInput* newData,TCovers* out_covers){
+void TDigestMatcher::search_cover(const hpatch_TStreamInput* newData,hpatch_TOutputCovers* out_covers){
     if (m_blocks.empty()) return;
     if (newData->streamSize<m_kMatchBlockSize) return;
     TNewStreamCache newStream(newData,m_mem.data(),m_newCacheSize,m_backupCacheSize,m_kMatchBlockSize);

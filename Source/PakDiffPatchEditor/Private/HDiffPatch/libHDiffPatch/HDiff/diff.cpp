@@ -29,7 +29,7 @@
 #include "diff.h"
 #include <string.h> //strlen memcmp
 #include <stdio.h>  //fprintf
-#include <algorithm> //std::max
+#include <algorithm> //std::max std::sort
 #include <vector>
 #include "private_diff/suffix_string.h"
 #include "private_diff/bytes_rle.h"
@@ -43,19 +43,17 @@
 #include "private_diff/limit_mem_diff/stream_serialize.h"
 using namespace hdiff_private;
 
-static void getCovers_by_stream(const hpatch_TStreamInput*  newData,
-                                const hpatch_TStreamInput*  oldData,
-                                size_t kMatchBlockSize,bool kIsSkipSameRange,
-                                TCoversBuf& out_covers);
-
-
 static const char* kHDiffVersionType  ="HDIFF13";
 static const char* kHDiffSFVersionType="HDIFFSF20";
 
 #define checki(value,info) { if (!(value)) { throw std::runtime_error(info); } }
 #define hcheck(value) checki(value,"check "#value" error!")
 
-static const int kMinMatchLen = 5; //最小搜寻相等长度。
+#if (_SSTRING_FAST_MATCH>0)
+static const int kMinMatchLen   = (_SSTRING_FAST_MATCH>5)?_SSTRING_FAST_MATCH:5;
+#else
+static const int kMinMatchLen   = 5; //最小搜寻相等长度。
+#endif
 static const int kMinMatchScore = 2; //最小搜寻覆盖收益.
 
 namespace{
@@ -427,7 +425,6 @@ static void select_cover(std::vector<TOldCover>& covers,const TDiffData& diff,
 //尝试延长覆盖区域.
 static void extend_cover(std::vector<TOldCover>& covers,const TDiffData& diff,
                          const TFixedFloatSmooth kExtendMinSameRatio,TDiffLimit* diffLimit=0){
-    const size_t kNoLimitLen=~(size_t)0;
     TInt lastNewEnd=diffLimit?diffLimit->newPos:0;
     for (TInt i=0; i<(TInt)covers.size(); ++i) {
         TInt newPos_next;
@@ -505,73 +502,6 @@ static void extend_cover(std::vector<TOldCover>& covers,const TDiffData& diff,
         assert_covers_safe(_covers,newSize,oldSize);
     }
 
-    
-    struct TNewDataSubDiffStream:public hpatch_TStreamInput{
-        size_t curReadPos;
-        size_t nextCoveri;
-        size_t curDataLen;
-        const TDiffData& diff;
-        const TByte* oldData;
-        inline explicit TNewDataSubDiffStream(const TDiffData& _diff)
-        :diff(_diff){
-            initRead();
-            streamImport=this;
-            streamSize=diff.newData_end-diff.newData;
-            read=_read;
-        }
-        inline ~TNewDataSubDiffStream(){ assert(curReadPos==streamSize); }
-        inline void initRead(){
-            curReadPos=0;
-            nextCoveri=0;
-            curDataLen=0;
-        }
-        inline void readTo(unsigned char* out_data,unsigned char* out_data_end){
-            size_t readLen=out_data_end-out_data;
-            while (readLen>0){
-                if (curDataLen==0){
-                    if (nextCoveri<diff.covers.size()){
-                        const TOldCover& cover=diff.covers[nextCoveri];
-                        if ((size_t)cover.newPos>curReadPos){
-                            curDataLen=cover.newPos-curReadPos;
-                            oldData=0;
-                        }else{
-                            assert(cover.newPos==curReadPos);
-                            curDataLen=cover.length;
-                            oldData=diff.oldData+cover.oldPos;
-                            ++nextCoveri;
-                        }
-                    }else{
-                        curDataLen=(size_t)(streamSize-curReadPos);
-                        oldData=0;
-                    }
-                }
-                size_t len=std::min(curDataLen,readLen);
-                if (oldData!=0){
-                    const TByte* newData=diff.newData+curReadPos;
-                    for (size_t i=0;i<len;i++){
-                        out_data[i]=newData[i]-oldData[i];
-                    }
-                }else{
-                    memset(out_data,0,len);
-                }
-                if (oldData) oldData+=len;
-                curReadPos+=len;
-                curDataLen-=len;
-                out_data+=len;
-                readLen-=len;
-            }
-        }
-        static hpatch_BOOL _read(const struct hpatch_TStreamInput* stream,hpatch_StreamPos_t readFromPos,
-                                 unsigned char* out_data,unsigned char* out_data_end){
-            TNewDataSubDiffStream* self=(TNewDataSubDiffStream*)stream->streamImport;
-            if (readFromPos==0) self->initRead();
-            if (readFromPos!=self->curReadPos) return hpatch_FALSE;
-            assert(readFromPos+(size_t)(out_data_end-out_data)<=self->streamSize);
-            self->readTo(out_data,out_data_end);
-            return hpatch_TRUE;
-        }
-    };
-
 //diff结果序列化输出.
 static void serialize_diff(const TDiffData& diff,std::vector<TByte>& out_diff){
     const TUInt coverCount=(TUInt)diff.covers.size();
@@ -611,33 +541,10 @@ static void serialize_diff(const TDiffData& diff,std::vector<TByte>& out_diff){
     pushBack(out_diff,inc_oldPos_buf);
     pushBack(out_diff,&newDataDiffStream);
     
-    TNewDataSubDiffStream newDataSubDiff(diff);
+    TNewDataSubDiffStream_mem newDataSubDiff(diff.newData,diff.newData_end,
+                                             diff.oldData,diff.oldData_end,_covers);
     bytesRLE_save(out_diff,&newDataSubDiff,kRle_bestSize);
 }
-    
-    
-    static void do_compress(std::vector<TByte>& out_code,const hpatch_TStreamInput* data,
-                            const hdiff_TCompress* compressPlugin,bool isMustCompress=false){
-        out_code.clear();
-        if (!compressPlugin) return;
-        if (data->streamSize==0) return;
-        hpatch_StreamPos_t maxCodeSize=compressPlugin->maxCompressedSize(data->streamSize);
-        if ((maxCodeSize<=data->streamSize)||(maxCodeSize!=(size_t)maxCodeSize)) return; //error
-        out_code.resize((size_t)maxCodeSize);
-        hpatch_TStreamOutput codeStream;
-        mem_as_hStreamOutput(&codeStream,out_code.data(),out_code.data()+out_code.size());
-        hpatch_StreamPos_t codeSize=compressPlugin->compress(compressPlugin,&codeStream,data);
-        if ((codeSize>0)&&(isMustCompress||(codeSize<data->streamSize)))
-            out_code.resize((size_t)codeSize); //ok
-        else
-            out_code.clear();//error or cancel
-    }
-    static inline void do_compress(std::vector<TByte>& out_code,const std::vector<TByte>& data,
-                            const hdiff_TCompress* compressPlugin,bool isMustCompress=false){
-        hpatch_TStreamInput dataStream;
-        mem_as_hStreamInput(&dataStream,data.data(),data.data()+data.size());
-        do_compress(out_code,&dataStream,compressPlugin,isMustCompress);
-    }
     
     inline static void pushCompressCode(std::vector<TByte>& out_diff,
                                         const std::vector<TByte>& compress_code,
@@ -698,7 +605,10 @@ static void serialize_compressed_diff(const TDiffData& diff,std::vector<TByte>& 
     std::vector<TByte> rle_ctrlBuf;
     std::vector<TByte> rle_codeBuf;
     {
-        TNewDataSubDiffStream newDataSubDiff(diff);
+        const TCovers _covers((void*)diff.covers.data(),diff.covers.size(),
+                              sizeof(*diff.covers.data())==sizeof(hpatch_TCover32));
+        TNewDataSubDiffStream_mem newDataSubDiff(diff.newData,diff.newData_end,
+                                                 diff.oldData,diff.oldData_end,_covers);
         bytesRLE_save(rle_ctrlBuf,rle_codeBuf,&newDataSubDiff,kRle_bestSize);
     }
     
@@ -738,25 +648,6 @@ static void serialize_compressed_diff(const TDiffData& diff,std::vector<TByte>& 
     pushCompressCode(out_diff,compress_newDataDiff,&newDataDiffStream);
 }
     
-    static void search_cover_by_stream(TDiffData& diff,size_t kMatchBlockSize,bool isSkipSameRange){
-        hdiff_TStreamInput oldData;
-        mem_as_hStreamInput(&oldData,diff.oldData,diff.oldData_end);
-        hdiff_TStreamInput newData;
-        mem_as_hStreamInput(&newData,diff.newData,diff.newData_end);
-        TCoversBuf covers(newData.streamSize,oldData.streamSize);
-        getCovers_by_stream(&newData,&oldData,kMatchBlockSize,isSkipSameRange,covers);
-       
-        size_t coverCount=covers.coverCount();
-        diff.covers.resize(coverCount);
-        TOldCover* outCover=diff.covers.data();
-        for (size_t i=0;i<coverCount;++i,++outCover){
-            TCover cover;
-            covers.covers(i,&cover);
-            outCover->oldPos=(TInt)cover.oldPos;
-            outCover->newPos=(TInt)cover.newPos;
-            outCover->length=(TInt)cover.length;
-        }
-    }
 
 static void dispose_cover(std::vector<TOldCover>& covers,const TDiffData& diff,
                          int kMinSingleMatchScore,TDiffLimit* diffLimit=0){
@@ -769,10 +660,11 @@ static void dispose_cover(std::vector<TOldCover>& covers,const TDiffData& diff,
     extend_cover(covers,diff,kExtendMinSameRatio,diffLimit);//select_cover会删除一些覆盖线,所以重新扩展.
 }
 
+static const hpatch_StreamPos_t _kNullCoverHitEndPos =~(hpatch_StreamPos_t)0;
 struct TDiffResearchCover:public IDiffResearchCover{
     TDiffResearchCover(TDiffData& diff_,const TSuffixString& sstring_,int kMinSingleMatchScore_)
         :diff(diff_),sstring(sstring_),kMinSingleMatchScore(kMinSingleMatchScore_),
-        limitCoverHitEndPos_back(0){ researchCover=_researchCover; }
+        limitCoverIndex_back(~(size_t)0),limitCoverHitEndPos_back(_kNullCoverHitEndPos){ researchCover=_researchCover; }
 
     void _researchRange(TDiffLimit* diffLimit){
         search_cover(curCovers,diff,sstring,diffLimit);
@@ -784,20 +676,19 @@ struct TDiffResearchCover:public IDiffResearchCover{
     }
 
     inline void endResearchCover(){
-        if (limitCoverHitEndPos_back!=0){
+        if (limitCoverHitEndPos_back!=_kNullCoverHitEndPos){
             TOldCover& cover=diff.covers[limitCoverIndex_back];
             cover.oldPos+=(TInt)limitCoverHitEndPos_back;
             cover.newPos+=(TInt)limitCoverHitEndPos_back;
             cover.length-=(TInt)limitCoverHitEndPos_back;
-            limitCoverHitEndPos_back=0;
+            limitCoverHitEndPos_back=_kNullCoverHitEndPos;
         }
     }
     inline void doResearchCover(IDiffSearchCoverListener* listener,size_t limitCoverIndex,
                                 hpatch_StreamPos_t endPosBack,hpatch_StreamPos_t hitPos,hpatch_StreamPos_t hitLen){
-        if (limitCoverIndex_back!=limitCoverIndex){
+        if (limitCoverIndex_back!=limitCoverIndex)
             endResearchCover();
-            limitCoverIndex_back=limitCoverIndex;
-        }
+        limitCoverIndex_back=limitCoverIndex;
         limitCoverHitEndPos_back=hitPos+hitLen;
         
         const TOldCover& cover=diff.covers[limitCoverIndex];
@@ -826,10 +717,6 @@ struct TDiffResearchCover:public IDiffResearchCover{
         TDiffResearchCover* self=(TDiffResearchCover*)diffi;
         self->doResearchCover(listener,limitCoverIndex,endPosBack,hitPos,hitLen);
     }
-    struct _cmp_by_newPos_t{
-        template<class TCover>
-        inline bool operator()(const TCover& x,const TCover& y){ return x.newPos<y.newPos; }
-    };
     
     void researchFinish(){
         endResearchCover();
@@ -841,7 +728,7 @@ struct TDiffResearchCover:public IDiffResearchCover{
         diff.covers.resize(insert);
         diff.covers.insert(diff.covers.end(),reCovers.begin(),reCovers.end());
         std::inplace_merge(diff.covers.begin(),diff.covers.begin()+insert,
-                           diff.covers.end(),_cmp_by_newPos_t());
+                           diff.covers.end(),cover_cmp_by_new_t<TOldCover>());
     }
 
     TDiffData&              diff;
@@ -854,12 +741,45 @@ struct TDiffResearchCover:public IDiffResearchCover{
     TCompressDetect  nocover_detect;
     TCompressDetect  cover_detect;
 };
+
+struct TDiffInsertCover:public IDiffInsertCover{
+    inline TDiffInsertCover(std::vector<TOldCover>& _covers)
+    :covers(_covers){
+        insertCover=_insertCover;
+    }
+    static void* _insertCover(IDiffInsertCover* diffi,const void* pInsertCovers,size_t insertCoverCount,bool insertIsCover32){
+        TDiffInsertCover* self=(TDiffInsertCover*)diffi;
+        return self->_insertCover(pInsertCovers,insertCoverCount,insertIsCover32);
+    }
+    void* _insertCover(const void* pInsertCovers,size_t insertCoverCount,bool insertIsCover32){
+        const bool isCover32=sizeof(*covers.data())==sizeof(hpatch_TCover32);
+        if (insertIsCover32==isCover32){
+            covers.insert(covers.end(),(const TOldCover*)pInsertCovers,
+                          ((const TOldCover*)pInsertCovers)+insertCoverCount);
+        }else{
+            size_t oldSize=covers.size();
+            covers.resize(oldSize +insertCoverCount);
+            for (size_t i=0;i<insertCoverCount;i++){
+                if (insertIsCover32){
+                    const hpatch_TCover32& s=((const hpatch_TCover32*)pInsertCovers)[i];
+                    covers[oldSize+i]=TOldCover((TInt)s.oldPos,(TInt)s.newPos,(TInt)s.length);
+                }else{
+                    const hpatch_TCover& s=((const hpatch_TCover*)pInsertCovers)[i];
+                    covers[oldSize+i]=TOldCover((TInt)s.oldPos,(TInt)s.newPos,(TInt)s.length);
+                }
+            }
+        }
+        return covers.data();
+    }
+    std::vector<TOldCover>& covers;
+};
   
 
 static void get_diff(const TByte* newData,const TByte* newData_end,
                      const TByte* oldData,const TByte* oldData_end,
                      TDiffData&   out_diff,int kMinSingleMatchScore,
-                     const TSuffixString* sstring=0,ICoverLinesListener* listener=0){
+                     bool isUseBigCacheMatch,ICoverLinesListener* listener=0,
+                     const TSuffixString* sstring=0){
     assert(newData<=newData_end);
     assert(oldData<=oldData_end);
     TDiffData& diff=out_diff;
@@ -872,7 +792,7 @@ static void get_diff(const TByte* newData,const TByte* newData_end,
     if (!isCover32) 
         assert(sizeof(*diff.covers.data())==sizeof(hpatch_TCover));
     {
-        TSuffixString _sstring_default(0,0);
+        TSuffixString _sstring_default(isUseBigCacheMatch);
         if (sstring==0){
             _sstring_default.resetSuffixString(oldData,oldData_end);
             sstring=&_sstring_default;
@@ -889,14 +809,23 @@ static void get_diff(const TByte* newData,const TByte* newData_end,
         sstring=0;
         _sstring_default.clear();
     }
-
+    if (listener&&listener->insert_cover){
+        TDiffInsertCover diffInsertCover(diff.covers);
+        hpatch_StreamPos_t newDataSize=(size_t)(diff.newData_end-diff.newData);
+        hpatch_StreamPos_t oldDataSize=(size_t)(diff.oldData_end-diff.oldData);
+        listener->insert_cover(listener,&diffInsertCover,diff.covers.data(),diff.covers.size(),isCover32,
+                               &newDataSize,&oldDataSize);
+        diff.newData_end=diff.newData+(size_t)newDataSize;
+        diff.oldData_end=diff.oldData+(size_t)oldDataSize;
+        assert_covers_safe(diff.covers,diff.newData_end-diff.newData,diff.oldData_end-diff.oldData);
+    }
     if (listener&&listener->search_cover_finish){
         hpatch_StreamPos_t newDataSize=(size_t)(diff.newData_end-diff.newData);
         hpatch_StreamPos_t oldDataSize=(size_t)(diff.oldData_end-diff.oldData);
         size_t newCoverCount=diff.covers.size();
         listener->search_cover_finish(listener,diff.covers.data(),&newCoverCount,isCover32,
                                       &newDataSize,&oldDataSize);
-        hcheck(newCoverCount<=diff.covers.size());
+        check(newCoverCount<=diff.covers.size());
         diff.covers.resize(newCoverCount);
         diff.newData_end=diff.newData+(size_t)newDataSize;
         diff.oldData_end=diff.oldData+(size_t)oldDataSize;
@@ -912,19 +841,31 @@ static void get_diff(const TByte* newData,const TByte* newData_end,
 void create_diff(const TByte* newData,const TByte* newData_end,
                  const TByte* oldData,const TByte* oldData_end,
                  std::vector<TByte>& out_diff,
-                 int kMinSingleMatchScore){
+                 int kMinSingleMatchScore,bool isUseBigCacheMatch){
     TDiffData diff;
-    get_diff(newData,newData_end,oldData,oldData_end,diff,kMinSingleMatchScore);
+    get_diff(newData,newData_end,oldData,oldData_end,diff,
+             kMinSingleMatchScore,isUseBigCacheMatch);
     serialize_diff(diff,out_diff);
 }
 
 void create_compressed_diff(const TByte* newData,const TByte* newData_end,
                             const TByte* oldData,const TByte* oldData_end,
-                            std::vector<TByte>& out_diff,
-                            const hdiff_TCompress* compressPlugin,int kMinSingleMatchScore){
+                            std::vector<TByte>& out_diff,const hdiff_TCompress* compressPlugin,
+                            int kMinSingleMatchScore,bool isUseBigCacheMatch,ICoverLinesListener* listener){
     TDiffData diff;
-    get_diff(newData,newData_end,oldData,oldData_end,diff,kMinSingleMatchScore);
+    get_diff(newData,newData_end,oldData,oldData_end,diff,
+             kMinSingleMatchScore,isUseBigCacheMatch,listener);
     serialize_compressed_diff(diff,out_diff,compressPlugin);
+}
+
+void create_compressed_diff(const TByte* newData,const TByte* newData_end,
+                            const TByte* oldData,const TByte* oldData_end,
+                            const hpatch_TStreamOutput* out_diff,const hdiff_TCompress* compressPlugin,
+                            int kMinSingleMatchScore,bool isUseBigCacheMatch,ICoverLinesListener* listener){
+    std::vector<unsigned char> _out_diff;
+    create_compressed_diff(newData,newData_end,oldData,oldData_end,_out_diff,
+                           compressPlugin,kMinSingleMatchScore,isUseBigCacheMatch,listener);
+    checki(out_diff->write(out_diff,0,_out_diff.data(),_out_diff.data()+_out_diff.size()),"create_compressed_diff() out_diff->write");
 }
 
 static void serialize_single_compressed_diff(const hpatch_TStreamInput* newStream,const hpatch_TStreamInput* oldStream,
@@ -952,19 +893,23 @@ void create_single_compressed_diff(const TByte* newData,const TByte* newData_end
                                    const TByte* oldData,const TByte* oldData_end,
                                    std::vector<unsigned char>& out_diff,
                                    const hdiff_TCompress* compressPlugin,int kMinSingleMatchScore,
-                                   size_t patchStepMemSize,ICoverLinesListener* listener){
+                                   size_t patchStepMemSize,bool isUseBigCacheMatch,
+                                   ICoverLinesListener* listener){
     TVectorAsStreamOutput outDiffStream(out_diff);
     create_single_compressed_diff(newData,newData_end,oldData,oldData_end,&outDiffStream,
-                                  compressPlugin,kMinSingleMatchScore,patchStepMemSize,listener);
+                                  compressPlugin,kMinSingleMatchScore,patchStepMemSize,
+                                  isUseBigCacheMatch,listener);
 }
 
 void create_single_compressed_diff(const TByte* newData,const TByte* newData_end,
                                    const TByte* oldData,const TByte* oldData_end,
                                    const hpatch_TStreamOutput* out_diff,
                                    const hdiff_TCompress* compressPlugin,int kMinSingleMatchScore,
-                                   size_t patchStepMemSize,ICoverLinesListener* listener){
+                                   size_t patchStepMemSize,bool isUseBigCacheMatch,
+                                   ICoverLinesListener* listener){
     TDiffData diff;
-    get_diff(newData,newData_end,oldData,oldData_end,diff,kMinSingleMatchScore,0,listener);
+    get_diff(newData,newData_end,oldData,oldData_end,diff,
+             kMinSingleMatchScore,isUseBigCacheMatch,listener);
 
     hpatch_TStreamInput _newStream;
     hpatch_TStreamInput _oldStream;
@@ -983,48 +928,11 @@ void create_single_compressed_diff_stream(const hpatch_TStreamInput*  newData,
                                           size_t kMatchBlockSize,size_t patchStepMemSize){
     const bool isSkipSameRange=(compressPlugin!=0);
     TCoversBuf covers(newData->streamSize,oldData->streamSize);
-    getCovers_by_stream(newData,oldData,kMatchBlockSize,isSkipSameRange,covers);
+    get_match_covers_by_block(newData,oldData,&covers,kMatchBlockSize,isSkipSameRange);
     serialize_single_compressed_diff(newData,oldData,true,covers,
                                      out_diff,compressPlugin,patchStepMemSize);
 }
 
-
-
-    #define _test(value) { if (!(value)) { LOG_ERR("patch check "#value" error!\n");  return hpatch_FALSE; } }
-
-    struct _TCheckOutNewDataStream:public hpatch_TStreamOutput{
-        explicit _TCheckOutNewDataStream(const hpatch_TStreamInput*  _newData,
-                                         TByte* _buf,size_t _bufSize)
-        :newData(_newData),writedLen(0),buf(_buf),bufSize(_bufSize){
-            streamImport=this;
-            streamSize=newData->streamSize;
-            read_writed=0;
-            write=_write_check;
-        }
-        static hpatch_BOOL _write_check(const hpatch_TStreamOutput* stream,hpatch_StreamPos_t writeToPos,
-                                        const TByte* data,const TByte* data_end){
-            _TCheckOutNewDataStream* self=(_TCheckOutNewDataStream*)stream->streamImport;
-            _test(self->writedLen==writeToPos);
-            self->writedLen+=(size_t)(data_end-data);
-            _test(self->writedLen<=self->streamSize);
-            
-            hpatch_StreamPos_t readPos=writeToPos;
-            while (data<data_end) {
-                size_t readLen=(size_t)(data_end-data);
-                if (readLen>self->bufSize) readLen=self->bufSize;
-                _test(self->newData->read(self->newData,readPos,self->buf,self->buf+readLen));
-                _test(0==memcmp(data,self->buf,readLen));
-                data+=readLen;
-                readPos+=readLen;
-            }
-            return hpatch_TRUE;
-        }
-        bool isWriteFinish()const{ return writedLen==newData->streamSize; }
-        const hpatch_TStreamInput*  newData;
-        hpatch_StreamPos_t          writedLen;
-        TByte*                      buf;
-        size_t                      bufSize;
-    };
 
 bool check_diff(const TByte* newData,const TByte* newData_end,
                 const TByte* oldData,const TByte* oldData_end,
@@ -1044,9 +952,9 @@ bool check_diff(const hpatch_TStreamInput*  newData,
     const size_t kACacheBufSize=hpatch_kFileIOBufBetterSize;
     TAutoMem _cache(kACacheBufSize*(1+8));
     _TCheckOutNewDataStream out_newData(newData,_cache.data(),kACacheBufSize);
-    _test(patch_stream_with_cache(&out_newData,oldData,diff,
-                                  _cache.data()+kACacheBufSize,_cache.data_end()));
-    _test(out_newData.isWriteFinish());
+    _test_rt(patch_stream_with_cache(&out_newData,oldData,diff,
+                                     _cache.data()+kACacheBufSize,_cache.data_end()));
+    _test_rt(out_newData.isWriteFinish());
     return true;
 }
 
@@ -1070,9 +978,9 @@ bool check_compressed_diff(const hpatch_TStreamInput*  newData,
     const size_t kACacheBufSize=hpatch_kFileIOBufBetterSize;
     TAutoMem _cache(kACacheBufSize*(1+6));
     _TCheckOutNewDataStream out_newData(newData,_cache.data(),kACacheBufSize);
-    _test(patch_decompress_with_cache(&out_newData,oldData,compressed_diff,decompressPlugin,
-                                             _cache.data()+kACacheBufSize,_cache.data_end()));
-    _test(out_newData.isWriteFinish());
+    _test_rt(patch_decompress_with_cache(&out_newData,oldData,compressed_diff,decompressPlugin,
+                                         _cache.data()+kACacheBufSize,_cache.data_end()));
+    _test_rt(out_newData.isWriteFinish());
     return true;
 }
 
@@ -1126,8 +1034,8 @@ bool check_single_compressed_diff(const hpatch_TStreamInput* newData,
     TAutoMem _cache(kACacheBufSize*1);
     _TCheckOutNewDataStream out_newData(newData,_cache.data(),kACacheBufSize);
 
-    _test(patch_single_stream(&listener,&out_newData,oldData,diff,0,0));
-    _test(out_newData.isWriteFinish());
+    _test_rt(patch_single_stream(&listener,&out_newData,oldData,diff,0,0));
+    _test_rt(out_newData.isWriteFinish());
     return true;
 }
 
@@ -1139,26 +1047,62 @@ void __hdiff_private__create_compressed_diff(const TByte* newData,const TByte* n
                                              const hdiff_TCompress* compressPlugin,int kMinSingleMatchScore,
                                              const TSuffixString* sstring){
     TDiffData diff;
-    get_diff(newData,newData_end,oldData,oldData_end,diff,kMinSingleMatchScore,sstring);
+    get_diff(newData,newData_end,oldData,oldData_end,diff,
+             kMinSingleMatchScore,false,0,sstring);
     serialize_compressed_diff(diff,out_diff,compressPlugin);
 }
 
 
 //======================
-#include "private_diff/limit_mem_diff/digest_matcher.h"
-#include "private_diff/limit_mem_diff/stream_serialize.h"
 
-static void getCovers_by_stream(const hpatch_TStreamInput*  newData,
-                                const hpatch_TStreamInput*  oldData,
-                                size_t kMatchBlockSize,bool kIsSkipSameRange,
-                                TCoversBuf& out_covers){
-    {
-        TDigestMatcher matcher(oldData,kMatchBlockSize,kIsSkipSameRange);
-        matcher.search_cover(newData,&out_covers);
-        assert_covers_safe(out_covers,newData->streamSize,oldData->streamSize);
-    }
+void get_match_covers_by_block(const hpatch_TStreamInput* newData,const hpatch_TStreamInput* oldData,
+                               hpatch_TOutputCovers* out_covers,size_t kMatchBlockSize,bool kIsSkipSameRange){
+    assert(out_covers->push_cover!=0);
+    TDigestMatcher matcher(oldData,kMatchBlockSize,kIsSkipSameRange);
+    matcher.search_cover(newData,out_covers);
     //todo: + extend_cover_stream ?
 }
+void get_match_covers_by_block(const unsigned char* newData,const unsigned char* newData_end,
+                               const unsigned char* oldData,const unsigned char* oldData_end,
+                               hpatch_TOutputCovers* out_covers,size_t kMatchBlockSize,bool kIsSkipSameRange){
+    hdiff_TStreamInput oldData_stream;
+    mem_as_hStreamInput(&oldData_stream,oldData,oldData_end);
+    hdiff_TStreamInput newData_stream;
+    mem_as_hStreamInput(&newData_stream,newData,newData_end);
+    get_match_covers_by_block(&newData_stream,&oldData_stream,out_covers,kMatchBlockSize,kIsSkipSameRange);
+}
+
+void get_match_covers_by_sstring(const unsigned char* newData,const unsigned char* newData_end,
+                                 const unsigned char* oldData,const unsigned char* oldData_end,
+                                 std::vector<hpatch_TCover_sz>& out_covers,int kMinSingleMatchScore,
+                                 bool isUseBigCacheMatch,ICoverLinesListener* listener){
+    TDiffData diff;
+    get_diff(newData,newData_end,oldData,oldData_end,diff,
+             kMinSingleMatchScore,isUseBigCacheMatch,listener);
+    void* pcovers=&diff.covers;
+    out_covers.swap(*(std::vector<hpatch_TCover_sz>*)pcovers);
+}
+void get_match_covers_by_sstring(const unsigned char* newData,const unsigned char* newData_end,
+                                 const unsigned char* oldData,const unsigned char* oldData_end,
+                                 hpatch_TOutputCovers* out_covers,int kMinSingleMatchScore,
+                                 bool isUseBigCacheMatch,ICoverLinesListener* listener){
+    std::vector<hpatch_TCover_sz> covers;
+    get_match_covers_by_sstring(newData,newData_end,oldData,oldData_end,covers,
+                                kMinSingleMatchScore,isUseBigCacheMatch,listener);
+    const hpatch_TCover_sz* pcovers=covers.data();
+    for (size_t i=0;i<covers.size();++i,++pcovers){
+        if (sizeof(*pcovers)==sizeof(hpatch_TCover)){
+            out_covers->push_cover(out_covers,(const hpatch_TCover*)pcovers);
+        }else{
+            hpatch_TCover cover; 
+            cover.oldPos=pcovers->oldPos;
+            cover.newPos=pcovers->newPos;
+            cover.length=pcovers->length;
+            out_covers->push_cover(out_covers,&cover);
+        }
+    }
+}
+
 
 static void stream_serialize(const hpatch_TStreamInput*  newData,
                              hpatch_StreamPos_t          oldDataSize,
@@ -1217,7 +1161,7 @@ void create_compressed_diff_stream(const hpatch_TStreamInput*  newData,
                                    const hdiff_TCompress* compressPlugin,size_t kMatchBlockSize){
     const bool isSkipSameRange=(compressPlugin!=0);
     TCoversBuf covers(newData->streamSize,oldData->streamSize);
-    getCovers_by_stream(newData,oldData,kMatchBlockSize,isSkipSameRange,covers);
+    get_match_covers_by_block(newData,oldData,&covers,kMatchBlockSize,isSkipSameRange);
     stream_serialize(newData,oldData->streamSize,out_diff,compressPlugin,covers);
 }
 

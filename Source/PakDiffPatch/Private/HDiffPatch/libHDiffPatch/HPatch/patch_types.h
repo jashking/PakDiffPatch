@@ -71,8 +71,8 @@ extern "C" {
 #endif
 
 #define HDIFFPATCH_VERSION_MAJOR    4
-#define HDIFFPATCH_VERSION_MINOR    0
-#define HDIFFPATCH_VERSION_RELEASE  6
+#define HDIFFPATCH_VERSION_MINOR    1
+#define HDIFFPATCH_VERSION_RELEASE  2
 
 #define _HDIFFPATCH_VERSION          HDIFFPATCH_VERSION_MAJOR.HDIFFPATCH_VERSION_MINOR.HDIFFPATCH_VERSION_RELEASE
 #define _HDIFFPATCH_QUOTE(str) #str
@@ -135,6 +135,7 @@ extern "C" {
 #   include <android/log.h>
 #   define LOG_ERR(...) __android_log_print(ANDROID_LOG_ERROR, "hpatch", __VA_ARGS__)
 #else
+#   include <stdio.h>  //for stderr
 #   define LOG_ERR(...) fprintf(stderr,__VA_ARGS__)
 #endif
     
@@ -253,7 +254,13 @@ extern "C" {
         hpatch_uint32_t newPos;
         hpatch_uint32_t length;
     } hpatch_TCover32;
+    typedef struct hpatch_TCover_sz{
+        size_t oldPos;
+        size_t newPos;
+        size_t length;
+    } hpatch_TCover_sz;
 
+    //opened input covers
     typedef struct hpatch_TCovers{
         hpatch_StreamPos_t (*leave_cover_count)(const struct hpatch_TCovers* covers);
         //read out a cover,and to next cover pos; if error then return false
@@ -262,6 +269,10 @@ extern "C" {
         hpatch_BOOL                    (*close)(struct hpatch_TCovers* covers);
     } hpatch_TCovers;
     
+    //output covers
+    typedef struct hpatch_TOutputCovers{
+        hpatch_BOOL (*push_cover)(struct hpatch_TOutputCovers* out_covers,const hpatch_TCover* cover); 
+    } hpatch_TOutputCovers;
     
     typedef struct{
         hpatch_StreamPos_t  newDataSize;
