@@ -2,6 +2,10 @@
 
 #include "PakDiffPatchEditorModule.h"
 
+#include "PakDiffPatchEditorLog.h"
+
+DEFINE_LOG_CATEGORY(LogPakDiffPatchEditor);
+
 #define LOCTEXT_NAMESPACE "FPakDiffPatchEditorModule"
 
 void FPakDiffPatchEditorModule::StartupModule()
